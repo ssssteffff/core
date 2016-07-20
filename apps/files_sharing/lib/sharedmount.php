@@ -49,6 +49,12 @@ class SharedMount extends MountPoint implements MoveableMount {
 	 */
 	private $user;
 
+	/** @var \OCP\Share\IShare */
+	private $superShare;
+
+	/** @var \OCP\Share\IShare[] */
+	private $groupedShares;
+
 	/**
 	 * @param string $storage
 	 * @param SharedMount[] $mountpoints
@@ -58,9 +64,13 @@ class SharedMount extends MountPoint implements MoveableMount {
 	public function __construct($storage, array $mountpoints, $arguments = null, $loader = null) {
 		$this->user = $arguments['user'];
 		$this->recipientView = new View('/' . $this->user . '/files');
-		$newMountPoint = $this->verifyMountPoint($arguments['share'], $mountpoints);
+
+		$this->superShare = $arguments['superShare'];
+		$this->groupedShares = $arguments['groupedShares'];
+
+		$newMountPoint = $this->verifyMountPoint($this->superShare, $mountpoints);
 		$absMountPoint = '/' . $this->user . '/files' . $newMountPoint;
-		$arguments['ownerView'] = new View('/' . $arguments['share']['uid_owner'] . '/files');
+		$arguments['ownerView'] = new View('/' . $this->superShare['uid_owner'] . '/files');
 		parent::__construct($storage, $absMountPoint, $arguments, $loader);
 	}
 
@@ -124,6 +134,23 @@ class SharedMount extends MountPoint implements MoveableMount {
 		}
 
 		return $path;
+	}
+
+	/**
+	 * update fileTarget in the database if the mount point changed
+	 *
+	 * @param string $newPath
+	 * @param \OCP\Share\IShare $share
+	 * @return bool
+	 */
+	private function updateFileTarget($newPath, &$share) {
+		// FIXME: decide which of these two duplicate methods to use
+		$share->setTarget($newPath);
+
+		foreach ($this->groupedShares as $share) {
+			$share->setTarget($newPath);
+			\OC::$server->getShareManager()->moveShare($share, $this->user);
+		}
 	}
 
 	/**
@@ -238,8 +265,6 @@ class SharedMount extends MountPoint implements MoveableMount {
 	 * @return array
 	 */
 	public function getShare() {
-		/** @var $storage \OC\Files\Storage\Shared */
-		$storage = $this->getStorage();
-		return $storage->getShare();
+		return $this->superShare;
 	}
 }

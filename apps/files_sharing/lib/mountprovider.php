@@ -72,15 +72,21 @@ class MountProvider implements IMountProvider {
 		$shares = array_filter($shares, function ($share) {
 			return $share['permissions'] > 0;
 		});
+
+		$superShares = $this->buildSuperShares($shares);
+
 		$mounts = [];
-		foreach ($shares as $share) {
+		foreach ($superShares as $share) {
 			try {
 				$mounts[] = new SharedMount(
 					'\OC\Files\Storage\Shared',
 					$mounts,
 					[
-						'share' => $share,
-						'user' => $user->getUID()
+						'user' => $user->getUID(),
+						// parent share
+						'superShare' => $share[0],
+						// children/component of the superShare
+						'groupedShares' => $share[1],
 					],
 					$storageFactory
 				);
@@ -92,5 +98,80 @@ class MountProvider implements IMountProvider {
 
 		// array_filter removes the null values from the array
 		return array_filter($mounts);
+	}
+
+	/**
+	 * Groups shares by path (nodeId) and target path
+	 *
+	 * @param \OCP\Share\IShare[] $shares
+	 * @return \OCP\Share\IShare[][] array of grouped shares, each element in the
+	 * array is a group which itself is an array of shares
+	 */
+	private function groupShares(array $shares) {
+		$tmp = [];
+
+		foreach ($shares as $share) {
+			if (!isset($tmp[$share['file_source'])) {
+				$tmp[$share['file_source']];
+			}
+			$tmp[$share['file_source']][$share['file_target']][] = $share;
+		}
+
+		$result = [];
+		foreach ($tmp as $tmp2) {
+			foreach ($tmp2 as $item) {
+				$result[] = $item;
+			}
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Build super shares (virtual share) by grouping them by node id and target,
+	 * then for each group compute the super share and return it along with the matching
+	 * grouped shares. The most permissive permissions are used based on the permissions
+	 * of all shares within the group.
+	 *
+	 * @param \OCP\Share\IShare[] $allShares
+	 * @return array Tuple of [superShare, groupedShares]
+	 */
+	private function buildSuperShares(array $allShares) {
+		$result = [];
+
+		$groupedShares = $this->groupShares($allShares);
+
+		/** @var \OCP\Share\IShare[] $shares */
+		foreach ($groupedShares as $shares) {
+			if (count($shares) === 0) {
+				continue;
+			}
+
+			// compute super share based on first entry of the group
+			$superShare = [
+				'id' => $shares[0]['id'],
+				'uid_owner' => $shares[0]['uid_owner'],
+				'share_type' => $shares[0]['share_type'],
+				'item_type' => $shares[0]['item_type'],
+				'file_target' => $shares[0]['file_target'],
+				'file_source' => $shares[0]['file_source'],
+				'item_target' => null,
+				'item_source' => $shares[0]['item_source'],
+				'expiration' => null,
+				'stime' => $shares[0]['stime'],
+			];
+
+			// use most permissive permissions
+			$permissions = 0;
+			foreach ($shares as $share) {
+				$permissions |= $share['permissions'];
+			}
+
+			$superShare['permissions'] = $permissions;
+
+			$result[] = [$superShare, $shares];
+		}
+
+		return $result;
 	}
 }
